@@ -1,0 +1,17 @@
+[project]
+name = "claw-app"
+version = "0.1.0"
+description = "PySide6 voice companion for OpenClaw Gateway sessions"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "PySide6>=6.7",
+    "RealtimeSTT[faster-whisper]>=0.3",
+    "RealtimeTTS[piper]>=0.5",
+    "platformdirs>=4.2",
+    "websockets>=14",
+    "keyboard>=0.13",
+]
+
+[project.scripts]
+claw-app = "claw_app.app:run"
