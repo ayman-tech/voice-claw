@@ -13,7 +13,7 @@ SECRET_PATTERNS = [
     re.compile(r'("token"\s*:\s*")([^"]+)(")', re.IGNORECASE),
     re.compile(r'("password"\s*:\s*")([^"]+)(")', re.IGNORECASE),
     re.compile(r"(Authorization:\s*Bearer\s+)([^\s]+)()", re.IGNORECASE),
-    re.compile(r"(CLAW_TOKEN=)(.+)()", re.IGNORECASE),
+    re.compile(r"(VOICECLAW_TOKEN=)(.+)()", re.IGNORECASE),
 ]
 
 

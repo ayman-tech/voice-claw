@@ -106,6 +106,13 @@ def extract_text(value: Any) -> str:
     if isinstance(value, list):
         return "".join(extract_text(item) for item in value)
     if isinstance(value, dict):
+        # Agent delivered reply via message.send tool call
+        if value.get("type") == "toolCall" and value.get("name") == "message":
+            args = value.get("arguments", {})
+            if isinstance(args, dict) and args.get("action") == "send":
+                msg = args.get("message", "")
+                if msg:
+                    return str(msg)
         if isinstance(value.get("message"), dict):
             return extract_text(value.get("message"))
         if "data" in value and isinstance(value["data"], (dict, list)):

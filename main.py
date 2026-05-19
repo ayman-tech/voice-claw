@@ -1,4 +1,4 @@
-from claw_app.app import run
+from voice_claw.app import run
 
 
 if __name__ == "__main__":

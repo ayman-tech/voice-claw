@@ -1,6 +1,6 @@
 from unittest import TestCase
 
-from claw_app.voice import SentenceBuffer
+from voice_claw.voice import SentenceBuffer
 
 
 class VoiceTests(TestCase):

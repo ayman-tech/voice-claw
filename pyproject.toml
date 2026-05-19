@@ -1,5 +1,5 @@
 [project]
-name = "claw-app"
+name = "voice-claw"
 version = "0.1.0"
 description = "PySide6 voice companion for OpenClaw Gateway sessions"
 readme = "README.md"
@@ -14,4 +14,7 @@ dependencies = [
 ]
 
 [project.scripts]
-claw-app = "claw_app.app:run"
+voice-claw = "voice_claw.app:run"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

@@ -32,23 +32,27 @@ class AppConfig:
     stt_language: str = "en"
     stt_device: str = "cpu"
     stt_compute_type: str = "int8"
+    stt_silence_duration: float = 1.5
+    stt_initial_prompt: str = "Donna"
     piper_executable: str = ""
     piper_model_path: str = ""
     piper_config_path: str = ""
 
 
 ENV_CONFIG_MAP = {
-    "CLAW_GATEWAY_URL": "gateway_url",
-    "CLAW_TOKEN": "auth_token",
-    "CLAW_PASSWORD": "auth_password",
-    "CLAW_MODEL": "model",
-    "CLAW_AGENT_ID": "agent_id",
-    "CLAW_SESSION_KEY": "session_key",
-    "CLAW_MESSAGE_CHANNEL": "message_channel",
-    "CLAW_STT_MODEL": "stt_model",
-    "CLAW_STT_LANGUAGE": "stt_language",
-    "CLAW_STT_DEVICE": "stt_device",
-    "CLAW_STT_COMPUTE_TYPE": "stt_compute_type",
+    "VOICECLAW_GATEWAY_URL": "gateway_url",
+    "VOICECLAW_TOKEN": "auth_token",
+    "VOICECLAW_PASSWORD": "auth_password",
+    "VOICECLAW_MODEL": "model",
+    "VOICECLAW_AGENT_ID": "agent_id",
+    "VOICECLAW_SESSION_KEY": "session_key",
+    "VOICECLAW_MESSAGE_CHANNEL": "message_channel",
+    "VOICECLAW_STT_MODEL": "stt_model",
+    "VOICECLAW_STT_LANGUAGE": "stt_language",
+    "VOICECLAW_STT_DEVICE": "stt_device",
+    "VOICECLAW_STT_COMPUTE_TYPE": "stt_compute_type",
+    "VOICECLAW_STT_SILENCE": "stt_silence_duration",
+    "VOICECLAW_STT_PROMPT": "stt_initial_prompt",
     "PIPER_EXECUTABLE": "piper_executable",
     "PIPER_MODEL_PATH": "piper_model_path",
     "PIPER_CONFIG_PATH": "piper_config_path",

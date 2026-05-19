@@ -15,9 +15,9 @@ from .config import AppConfig
 LOGGER = logging.getLogger(__name__)
 SENTENCE_RE = re.compile(r"(.+?[.!?](?:\s+|$))", re.DOTALL)
 
-_SOUNDS_DIR = Path(__file__).parent.parent / "sounds"
-_SOUND_LONG = str(_SOUNDS_DIR / "interface-long.wav")
-_SOUND_SHORT = str(_SOUNDS_DIR / "interface-short.wav")
+_ASSETS_DIR = Path(__file__).parent.parent / "assets"
+_SOUND_LONG = str(_ASSETS_DIR / "interface-long.wav")
+_SOUND_SHORT = str(_ASSETS_DIR / "interface-short.wav")
 
 
 @dataclass(slots=True)
@@ -53,6 +53,7 @@ class SentenceBuffer:
 class TTSService:
     config: AppConfig
     on_error: Callable[[str], None] | None = None
+    on_audio_done: Callable[[], None] | None = None
     _stream: object | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock)
     _buffer: SentenceBuffer = field(default_factory=SentenceBuffer)
@@ -113,8 +114,17 @@ class TTSService:
                 bool(self.config.piper_config_path),
             )
             engine = PiperEngine(**kwargs)
-            self._stream = TextToAudioStream(engine)
+            on_done = self.on_audio_done
+            self._stream = TextToAudioStream(
+                engine,
+                on_audio_stream_stop=on_done,
+            )
             return self._stream
+
+    def warmup(self) -> None:
+        if not self.config.piper_model_path:
+            return
+        threading.Thread(target=self._get_stream, daemon=True, name="tts-warmup").start()
 
     def _report_error(self, message: str) -> None:
         LOGGER.error(message)
@@ -140,7 +150,7 @@ class STTService:
         self.config = config
         self.on_error = on_error
 
-    def transcribe_once(self) -> str:
+    def transcribe_once(self, on_ready: Callable[[], None] | None = None) -> str:
         from RealtimeSTT import AudioToTextRecorder
 
         def on_recording_stop() -> None:
@@ -152,9 +162,12 @@ class STTService:
             "language": self.config.stt_language or "en",
             "device": self.config.stt_device,
             "compute_type": self.config.stt_compute_type,
+            "post_speech_silence_duration": self.config.stt_silence_duration,
             "spinner": True,
             "on_recording_stop": on_recording_stop,
         }
+        if self.config.stt_initial_prompt:
+            kwargs["initial_prompt"] = self.config.stt_initial_prompt
         LOGGER.info(
             "Starting STT: model=%s language=%s device=%s",
             self.config.stt_model,
@@ -164,6 +177,8 @@ class STTService:
         recorder = AudioToTextRecorder(**kwargs)
         LOGGER.info("STT: recorder ready — speak now")
         _play_sound(_SOUND_LONG)
+        if on_ready:
+            on_ready()
         try:
             text = recorder.text().strip()
             LOGGER.info("STT completed: chars=%s", len(text))

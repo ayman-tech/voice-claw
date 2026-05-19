@@ -2,7 +2,7 @@ from pathlib import Path
 from unittest import TestCase
 from unittest.mock import patch
 
-from claw_app.config import AppConfig, load_config, load_dotenv, save_config
+from voice_claw.config import AppConfig, load_config, load_dotenv, save_config
 
 
 class ConfigTests(TestCase):
@@ -36,7 +36,7 @@ class ConfigTests(TestCase):
             self.assertEqual(loaded, original)
 
     def test_load_config_uses_claw_token_when_no_saved_token(self) -> None:
-        with patch.dict("os.environ", {"CLAW_TOKEN": "env-token"}, clear=False):
+        with patch.dict("os.environ", {"VOICECLAW_TOKEN": "env-token"}, clear=False):
             config = load_config(
                 Path("missing-test-settings.json"),
                 dotenv_path=Path("missing-test-env-file"),
@@ -51,7 +51,7 @@ class ConfigTests(TestCase):
             path = Path(directory) / "settings.json"
             save_config(AppConfig(auth_token="saved-token"), path)
 
-            with patch.dict("os.environ", {"CLAW_TOKEN": "env-token"}, clear=False):
+            with patch.dict("os.environ", {"VOICECLAW_TOKEN": "env-token"}, clear=False):
                 config = load_config(path, dotenv_path=Path(directory) / "missing.env")
 
         self.assertEqual(config.auth_token, "env-token")
@@ -62,7 +62,7 @@ class ConfigTests(TestCase):
             {
                 "PIPER_MODEL_PATH": "models/piper/voice.onnx",
                 "PIPER_CONFIG_PATH": "models/piper/voice.onnx.json",
-                "CLAW_STT_LANGUAGE": "en",
+                "VOICECLAW_STT_LANGUAGE": "en",
             },
             clear=False,
         ):
@@ -80,7 +80,7 @@ class ConfigTests(TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / ".env"
-            path.write_text("CLAW_TOKEN=dotenv-token\n", encoding="utf-8")
+            path.write_text("VOICECLAW_TOKEN=dotenv-token\n", encoding="utf-8")
             with patch.dict("os.environ", {}, clear=True):
                 load_dotenv(path)
-                self.assertEqual(__import__("os").environ["CLAW_TOKEN"], "dotenv-token")
+                self.assertEqual(__import__("os").environ["VOICECLAW_TOKEN"], "dotenv-token")

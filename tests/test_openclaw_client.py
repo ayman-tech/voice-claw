@@ -1,7 +1,7 @@
 from unittest import TestCase
 
-from claw_app.config import AppConfig
-from claw_app.openclaw_client import (
+from voice_claw.config import AppConfig
+from voice_claw.openclaw_client import (
     ENGLISH_ONLY_PREFIX,
     abort_request,
     connect_request,

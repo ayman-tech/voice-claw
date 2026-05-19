@@ -17,3 +17,5 @@ logs/
 # user defined
 piper/
 *.zip
+*.spec
+orb-preview.html
