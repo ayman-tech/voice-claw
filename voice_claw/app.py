@@ -107,11 +107,10 @@ QPushButton:hover {
 QPushButton:pressed { background-color: #111e36; }
 QPushButton:disabled { color: #2a3a50; background-color: #0e1626; border-color: #141e30; }
 QScrollArea#chat, QScrollArea#chat > QWidget {
-    background-color: #0c0c18;
-    border: 1px solid #141428;
-    border-radius: 8px;
+    background-color: #0a0a14;
+    border: none;
 }
-QWidget#chat_container { background-color: #0c0c18; }
+QWidget#chat_container { background-color: #0a0a14; }
 QLabel#bubble_user {
     background-color: #1a1a38;
     color: #a0a0cc;
@@ -137,7 +136,6 @@ QScrollBar::handle:vertical {
     min-height: 20px;
 }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
-QLabel#summary, QLabel#log_label { color: #22223a; font-size: 11px; }
 """
 
 
@@ -158,7 +156,7 @@ def run() -> int:
         QVBoxLayout,
         QWidget,
     )
-    log_path = setup_logging()
+    setup_logging()
     LOGGER.info("Starting OpenClaw Voice")
 
     class UiBridge(QObject):
@@ -220,14 +218,17 @@ def run() -> int:
                 (p for p in (_assets / "avatar.png", _assets / "avatar.jpg", _assets / "avatar.jpeg") if p.exists()),
                 None,
             )
-            _img_d = int((70 - 6) * 2)  # (radius - padding) * 2 = 128px
+            _dpr = QApplication.primaryScreen().devicePixelRatio()
+            _img_d = int((70 - 6) * 2 * _dpr)  # physical pixels = logical 128px × dpr
             _raw = QPixmap(str(_avatar_path)) if _avatar_path else None
             if _raw and not _raw.isNull():
-                self._avatar: QPixmap | None = _raw.scaled(
+                _scaled = _raw.scaled(
                     _img_d, _img_d,
                     Qt.AspectRatioMode.KeepAspectRatioByExpanding,
                     Qt.TransformationMode.SmoothTransformation,
                 )
+                _scaled.setDevicePixelRatio(_dpr)
+                self._avatar: QPixmap | None = _scaled
             else:
                 self._avatar = None
 
@@ -506,6 +507,7 @@ def run() -> int:
             title = QLabel("I'm Donna")
             title.setObjectName("title")
             title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            self._title_label = title
             subtitle = QLabel("I know everything")
             subtitle.setObjectName("subtitle")
             subtitle.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
@@ -543,16 +545,7 @@ def run() -> int:
             self.chat = ChatWidget()
             layout.addWidget(self.chat, stretch=1)
 
-            self.summary = QLabel()
-            self.summary.setObjectName("summary")
-            self.summary.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-            self.summary.setWordWrap(True)
-            layout.addWidget(self.summary)
-
-            self.log_label = QLabel(f"Log: {log_path.resolve()}")
-            self.log_label.setObjectName("log_label")
-            self.log_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-            layout.addWidget(self.log_label)
+            self.summary = ""
 
             self.connect_button.clicked.connect(self._on_connect_button)
             self.orb.clicked.connect(self._on_orb_clicked)
@@ -582,11 +575,12 @@ def run() -> int:
         def _sync_fields_from_config(self) -> None:
             tts_state = "configured" if self.config.piper_model_path else "missing Piper voice"
             token_state = "token set" if self.config.auth_token else "token missing"
-            self.summary.setText(
+            self.summary = (
                 f"{self.config.gateway_url} | session {self.config.session_key} | "
                 f"STT {self.config.stt_model}/{self.config.stt_language}/{self.config.stt_device} | "
                 f"TTS {tts_state} | {token_state}"
             )
+            self._title_label.setToolTip(self.summary)
 
         def _sync_config_from_fields(self) -> None:
             self.config = load_config()
