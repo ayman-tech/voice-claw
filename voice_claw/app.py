@@ -144,7 +144,7 @@ QLabel#summary, QLabel#log_label { color: #22223a; font-size: 11px; }
 def run() -> int:
     from PySide6.QtCore import QObject, QPointF, QRectF, QTimer, Qt, Signal
     from PySide6.QtGui import (
-        QBrush, QColor, QIcon, QPainter, QPen, QRadialGradient,
+        QBrush, QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap, QRadialGradient,
     )
     from PySide6.QtWidgets import (
         QApplication,
@@ -215,6 +215,21 @@ def run() -> int:
             self._timer.timeout.connect(self._tick)
             self._timer.start()
             self.setCursor(Qt.CursorShape.PointingHandCursor)
+            _assets = Path(__file__).parent.parent / "assets"
+            _avatar_path = next(
+                (p for p in (_assets / "avatar.png", _assets / "avatar.jpg", _assets / "avatar.jpeg") if p.exists()),
+                None,
+            )
+            _img_d = int((70 - 6) * 2)  # (radius - padding) * 2 = 128px
+            _raw = QPixmap(str(_avatar_path)) if _avatar_path else None
+            if _raw and not _raw.isNull():
+                self._avatar: QPixmap | None = _raw.scaled(
+                    _img_d, _img_d,
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            else:
+                self._avatar = None
 
         @property
         def state(self) -> str:
@@ -312,13 +327,29 @@ def run() -> int:
             painter.setBrush(QBrush(glow))
             painter.drawEllipse(QPointF(cx, cy), ar * 1.65, ar * 1.65)
 
-            # Main orb body
-            body = QRadialGradient(QPointF(cx - ar * 0.24, cy - ar * 0.28), ar * 1.25)
-            body.setColorAt(0.0, QColor(min(255, r + 95), min(255, g + 95), min(255, b + 95)))
-            body.setColorAt(0.55, QColor(r, g, b))
-            body.setColorAt(1.0, QColor(max(0, r - 50), max(0, g - 50), max(0, b - 50)))
-            painter.setBrush(QBrush(body))
-            painter.drawEllipse(QPointF(cx, cy), ar, ar)
+            if self._avatar:
+                # Clip to circle and draw avatar with inner padding
+                # img_r uses fixed radius so the image doesn't move during breathing
+                padding = 6.0
+                img_r = radius - padding
+                clip_path = QPainterPath()
+                clip_path.addEllipse(QPointF(cx, cy), img_r, img_r)
+                painter.save()
+                painter.setClipPath(clip_path)
+                painter.drawPixmap(int(cx - img_r), int(cy - img_r), self._avatar)
+                painter.restore()
+                # State-colored ring border
+                painter.setPen(QPen(QColor(r, g, b, 220), 3.0))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawEllipse(QPointF(cx, cy), ar, ar)
+            else:
+                # Fallback: original solid gradient orb
+                body = QRadialGradient(QPointF(cx - ar * 0.24, cy - ar * 0.28), ar * 1.25)
+                body.setColorAt(0.0, QColor(min(255, r + 95), min(255, g + 95), min(255, b + 95)))
+                body.setColorAt(0.55, QColor(r, g, b))
+                body.setColorAt(1.0, QColor(max(0, r - 50), max(0, g - 50), max(0, b - 50)))
+                painter.setBrush(QBrush(body))
+                painter.drawEllipse(QPointF(cx, cy), ar, ar)
 
             # Specular highlight
             spec = QRadialGradient(QPointF(cx - ar * 0.27, cy - ar * 0.30), ar * 0.52)

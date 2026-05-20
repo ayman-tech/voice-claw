@@ -19,3 +19,4 @@ piper/
 *.zip
 *.spec
 orb-preview.html
+assets/avatar.*
