@@ -176,6 +176,7 @@ def run() -> int:
         tts_audio_done = Signal()
         run_ended = Signal()
         hotkey_ptt = Signal()
+        gateway_disconnected = Signal(str)
 
     # ------------------------------------------------------------------ orb --
 
@@ -430,6 +431,10 @@ def run() -> int:
             self.tts_flush_timer.setSingleShot(True)
             self.tts_flush_timer.setInterval(1200)
             self.tts_flush_timer.timeout.connect(self.flush_tts_tail)
+            self.response_timeout_timer = QTimer(self)
+            self.response_timeout_timer.setSingleShot(True)
+            self.response_timeout_timer.setInterval(60_000*3) # 3min timeout
+            self.response_timeout_timer.timeout.connect(self._on_response_timeout)
             self.setWindowTitle("Donna")
             self.resize(400, 600)
             self._build_ui()
@@ -452,6 +457,7 @@ def run() -> int:
             self.bridge.run_ended.connect(self._on_run_ended)
             self.bridge.fallback_history.connect(self._after_fallback_history)
             self.bridge.hotkey_ptt.connect(self._on_hotkey_ptt)
+            self.bridge.gateway_disconnected.connect(self._on_gateway_disconnected)
 
         def _build_ui(self) -> None:
             root = QWidget()
@@ -577,6 +583,7 @@ def run() -> int:
                 on_delta=self.bridge.delta.emit,
                 on_status=self.bridge.status.emit,
                 on_run_ended=self.bridge.run_ended.emit,
+                on_disconnect=self.bridge.gateway_disconnected.emit,
             )
             future = self.runner.submit(self.client.connect())
             future.add_done_callback(self.bridge.connected.emit)
@@ -627,6 +634,7 @@ def run() -> int:
             LOGGER.info("History loaded: %s messages", len(messages))
 
         def _on_run_ended(self) -> None:
+            self.response_timeout_timer.stop()
             if self.pending_assistant_text:
                 return
             if not self.client:
@@ -709,6 +717,7 @@ def run() -> int:
             LOGGER.info("Sending transcribed user text: chars=%s", len(text))
             self.orb.set_state("thinking")
             self.set_status("Sending...")
+            self.response_timeout_timer.start()
             future = self.runner.submit(self.client.send_text(text))
             future.add_done_callback(self.bridge.sent.emit)
 
@@ -717,10 +726,22 @@ def run() -> int:
                 future.result()
             except Exception as exc:
                 LOGGER.exception("Could not send message")
+                self.response_timeout_timer.stop()
                 self.show_error(f"Could not send message: {exc}")
                 return
             self.orb.set_state("thinking")
             self.set_status("Thinking...")
+
+        def _on_response_timeout(self) -> None:
+            if self.orb.state != "thinking":
+                return
+            if not self.client or not self.client.connected:
+                LOGGER.warning("Response timeout — connection is dead, resetting")
+                self._reset_to_disconnected()
+                self.set_status("Connection lost — click Connect to reconnect")
+                return
+            LOGGER.warning("Response timeout — falling back to history fetch")
+            self._fetch_fallback_history()
 
         def handle_delta(self, delta: AssistantDelta) -> None:
             text_to_append = delta.text
@@ -729,6 +750,7 @@ def run() -> int:
 
             if text_to_append:
                 if not self.pending_assistant_text:
+                    self.response_timeout_timer.stop()
                     self.orb.set_state("speaking")
                     self.chat.start_assistant()
                 self.pending_assistant_text += text_to_append
@@ -737,6 +759,7 @@ def run() -> int:
                 if not delta.final:
                     self.tts_flush_timer.start()
             if delta.final:
+                self.response_timeout_timer.stop()
                 self.tts_flush_timer.stop()
                 self.tts.speak_delta("", final=True)
             if delta.final:
@@ -761,6 +784,12 @@ def run() -> int:
             self.connect_button.setText("Connect")
             self.connect_button.setEnabled(True)
             self.set_status("Disconnected")
+
+        def _on_gateway_disconnected(self, reason: str) -> None:
+            self.response_timeout_timer.stop()
+            LOGGER.warning("Gateway connection lost: %s", reason)
+            self._reset_to_disconnected()
+            self.set_status(f"Connection lost — click Connect to reconnect")
 
         def _after_abort(self, future: Future) -> None:
             disconnecting = self.connect_button.text() == "Disconnect" and not self.connect_button.isEnabled()

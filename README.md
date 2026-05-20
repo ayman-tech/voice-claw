@@ -188,13 +188,37 @@ python -m unittest discover -s tests
 
 ## Logs
 
-The app writes a rotating log file to:
+The app writes a daily log file to:
 
 ```text
-logs/openclaw-voice.log
+logs/YYYY-MM-DD.log
 ```
 
-Tokens and passwords are redacted before log lines are written. If Gateway connection or message sending fails, this file is the first thing to inspect.
+A new file is created each day the app starts. Files older than 14 days are deleted automatically on startup. Tokens and passwords are redacted before log lines are written. If Gateway connection or message sending fails, this file is the first thing to inspect.
+
+## Manual patches
+
+These are fixes applied directly to venv library files. **Re-apply them after recreating the venv or upgrading the affected package.**
+
+### RealtimeTTS — suppress Piper console windows on Windows
+
+**File:** `.venv/Lib/site-packages/RealtimeTTS/engines/piper_engine.py`
+
+**Problem:** `PiperEngine.synthesize` calls `subprocess.run` without `CREATE_NO_WINDOW`, so Windows flashes a console window for every sentence spoken.
+
+**Fix:** Add `import sys` at the top of the file, then change the `subprocess.run` call in `synthesize`:
+
+```python
+creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+result = subprocess.run(
+    cmd_list,
+    input=text.encode("utf-8"),
+    capture_output=True,
+    check=True,
+    shell=False,
+    creationflags=creation_flags,
+)
+```
 
 ## Language And Speech
 

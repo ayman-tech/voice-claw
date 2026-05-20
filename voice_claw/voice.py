@@ -163,7 +163,7 @@ class STTService:
             "device": self.config.stt_device,
             "compute_type": self.config.stt_compute_type,
             "post_speech_silence_duration": self.config.stt_silence_duration,
-            "spinner": True,
+            "spinner": False, # set to true when using console
             "on_recording_stop": on_recording_stop,
         }
         if self.config.stt_initial_prompt:

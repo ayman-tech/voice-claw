@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import logging
 import re
-from logging.handlers import RotatingFileHandler
+from datetime import date, timedelta
 from pathlib import Path
 
 
-LOG_PATH = Path("logs") / "openclaw-voice.log"
+LOG_DIR = Path("logs")
+_KEEP_DAYS = 14
+
 SECRET_PATTERNS = [
     re.compile(r'("token"\s*:\s*")([^"]+)(")', re.IGNORECASE),
     re.compile(r'("password"\s*:\s*")([^"]+)(")', re.IGNORECASE),
@@ -25,20 +27,40 @@ class RedactingFormatter(logging.Formatter):
         return rendered
 
 
-def setup_logging(path: Path = LOG_PATH) -> Path:
+def _today_log_path() -> Path:
+    return LOG_DIR / f"{date.today()}.log"
+
+
+def _cleanup_old_logs(keep_days: int = _KEEP_DAYS) -> None:
+    cutoff = date.today() - timedelta(days=keep_days)
+    for log_file in LOG_DIR.glob("*.log"):
+        try:
+            file_date = date.fromisoformat(log_file.stem)
+        except ValueError:
+            continue
+        if file_date < cutoff:
+            try:
+                log_file.unlink()
+            except OSError:
+                pass
+
+
+def setup_logging() -> Path:
+    path = _today_log_path()
     path.parent.mkdir(parents=True, exist_ok=True)
+    _cleanup_old_logs()
+
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
 
-    if any(isinstance(handler, RotatingFileHandler) and getattr(handler, "baseFilename", "") == str(path.resolve()) for handler in logger.handlers):
+    if any(
+        isinstance(h, logging.FileHandler)
+        and getattr(h, "baseFilename", "") == str(path.resolve())
+        for h in logger.handlers
+    ):
         return path
 
-    handler = RotatingFileHandler(
-        path,
-        maxBytes=1_000_000,
-        backupCount=3,
-        encoding="utf-8",
-    )
+    handler = logging.FileHandler(path, encoding="utf-8")
     handler.setFormatter(
         RedactingFormatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
     )
@@ -48,4 +70,4 @@ def setup_logging(path: Path = LOG_PATH) -> Path:
 
 
 def get_log_path() -> Path:
-    return LOG_PATH
+    return _today_log_path()

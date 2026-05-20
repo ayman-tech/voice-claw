@@ -221,11 +221,13 @@ class OpenClawClient:
         on_delta: Callable[[AssistantDelta], None] | None = None,
         on_status: Callable[[str], None] | None = None,
         on_run_ended: Callable[[], None] | None = None,
+        on_disconnect: Callable[[str], None] | None = None,
     ) -> None:
         self.config = config
         self.on_delta = on_delta
         self.on_status = on_status
         self.on_run_ended = on_run_ended
+        self.on_disconnect = on_disconnect
         self._ws: Any = None
         self._reader_task: asyncio.Task[None] | None = None
         self._pending: dict[str, asyncio.Future[JsonObject]] = {}
@@ -336,72 +338,82 @@ class OpenClawClient:
     async def _reader(self) -> None:
         assert self._ws is not None
         seen_frames: set[tuple[str, int]] = set()
-        async for raw in self._ws:
-            try:
-                message = json.loads(raw)
-            except json.JSONDecodeError:
-                LOGGER.warning("Ignoring invalid JSON frame from Gateway")
-                continue
-            if not isinstance(message, dict):
-                continue
+        disconnect_reason = "Connection closed"
+        try:
+            async for raw in self._ws:
+                try:
+                    message = json.loads(raw)
+                except json.JSONDecodeError:
+                    LOGGER.warning("Ignoring invalid JSON frame from Gateway")
+                    continue
+                if not isinstance(message, dict):
+                    continue
 
-            message_id = message.get("id")
-            if message_id is not None and str(message_id) in self._pending:
-                future = self._pending.pop(str(message_id))
-                if not future.done():
-                    try:
-                        future.set_result(self._response_or_raise(message))
-                    except Exception as exc:
-                        future.set_exception(exc)
-                continue
+                message_id = message.get("id")
+                if message_id is not None and str(message_id) in self._pending:
+                    future = self._pending.pop(str(message_id))
+                    if not future.done():
+                        try:
+                            future.set_result(self._response_or_raise(message))
+                        except Exception as exc:
+                            future.set_exception(exc)
+                    continue
 
-            delta = extract_assistant_delta(message)
-            if delta:
-                frame_payload = message.get("params") or message.get("payload") or message.get("data") or {}
-                if isinstance(frame_payload, dict):
-                    frame_run = str(frame_payload.get("runId", ""))
-                    frame_seq = frame_payload.get("seq")
-                    if frame_run and frame_seq is not None:
-                        frame_key = (frame_run, int(frame_seq))
-                        if frame_key in seen_frames:
-                            continue
-                        seen_frames.add(frame_key)
-                LOGGER.info(
-                    "Assistant delta: chars=%s final=%s run_id=%s frame_type=%s frame_event=%s frame_method=%s payload_keys=%s data_keys=%s",
-                    len(delta.text),
-                    delta.final,
-                    delta.run_id,
-                    message.get("type"),
-                    message.get("event"),
-                    message.get("method"),
-                    sorted(frame_payload.keys()) if isinstance(frame_payload, dict) else None,
-                    sorted(frame_payload.get("data", {}).keys()) if isinstance(frame_payload, dict) and isinstance(frame_payload.get("data"), dict) else repr(frame_payload.get("data"))[:60] if isinstance(frame_payload, dict) else None,
-                )
-                if delta.run_id:
-                    self.current_run_id = delta.run_id
-                if self.on_delta:
-                    self.on_delta(delta)
-            else:
-                payload = message.get("payload") or message.get("params") or {}
-                event_name = message.get("event") or message.get("method") or message.get("type") or "?"
-                if isinstance(payload, dict) and event_name not in {"health", "tick"}:
-                    nested = payload.get("data")
-                    data_summary = sorted(nested.keys()) if isinstance(nested, dict) else repr(nested)[:60]
-                    state_val = payload.get("state")
-                    state_summary = sorted(state_val.keys()) if isinstance(state_val, dict) else repr(state_val)[:80]
+                delta = extract_assistant_delta(message)
+                if delta:
+                    frame_payload = message.get("params") or message.get("payload") or message.get("data") or {}
+                    if isinstance(frame_payload, dict):
+                        frame_run = str(frame_payload.get("runId", ""))
+                        frame_seq = frame_payload.get("seq")
+                        if frame_run and frame_seq is not None:
+                            frame_key = (frame_run, int(frame_seq))
+                            if frame_key in seen_frames:
+                                continue
+                            seen_frames.add(frame_key)
                     LOGGER.info(
-                        "Unhandled Gateway frame: event=%s payload_keys=%s data=%s state=%s",
-                        event_name,
-                        sorted(payload.keys()),
-                        data_summary,
-                        state_summary,
+                        "Assistant delta: chars=%s final=%s run_id=%s frame_type=%s frame_event=%s frame_method=%s payload_keys=%s data_keys=%s",
+                        len(delta.text),
+                        delta.final,
+                        delta.run_id,
+                        message.get("type"),
+                        message.get("event"),
+                        message.get("method"),
+                        sorted(frame_payload.keys()) if isinstance(frame_payload, dict) else None,
+                        sorted(frame_payload.get("data", {}).keys()) if isinstance(frame_payload, dict) and isinstance(frame_payload.get("data"), dict) else repr(frame_payload.get("data"))[:60] if isinstance(frame_payload, dict) else None,
                     )
-                    if isinstance(nested, dict) and "endedAt" in nested:
-                        LOGGER.info("Run ended detected, firing on_run_ended callback")
-                        if self.on_run_ended:
-                            self.on_run_ended()
-                elif event_name not in {"health", "tick"}:
-                    LOGGER.info("Gateway event: %s", event_name)
+                    if delta.run_id:
+                        self.current_run_id = delta.run_id
+                    if self.on_delta:
+                        self.on_delta(delta)
+                else:
+                    payload = message.get("payload") or message.get("params") or {}
+                    event_name = message.get("event") or message.get("method") or message.get("type") or "?"
+                    if isinstance(payload, dict) and event_name not in {"health", "tick"}:
+                        nested = payload.get("data")
+                        data_summary = sorted(nested.keys()) if isinstance(nested, dict) else repr(nested)[:60]
+                        state_val = payload.get("state")
+                        state_summary = sorted(state_val.keys()) if isinstance(state_val, dict) else repr(state_val)[:80]
+                        LOGGER.info(
+                            "Unhandled Gateway frame: event=%s payload_keys=%s data=%s state=%s",
+                            event_name,
+                            sorted(payload.keys()),
+                            data_summary,
+                            state_summary,
+                        )
+                        if isinstance(nested, dict) and "endedAt" in nested:
+                            LOGGER.info("Run ended detected, firing on_run_ended callback")
+                            if self.on_run_ended:
+                                self.on_run_ended()
+                    elif event_name not in {"health", "tick"}:
+                        LOGGER.info("Gateway event: %s", event_name)
+        except Exception as exc:
+            disconnect_reason = str(exc)
+            LOGGER.warning("Gateway reader exited with error: %s", exc)
+        finally:
+            self._ws = None
+            LOGGER.warning("Gateway disconnected: %s", disconnect_reason)
+            if self.on_disconnect:
+                self.on_disconnect(disconnect_reason)
 
     def _response_or_raise(self, message: JsonObject) -> JsonObject:
         error = message.get("error")
