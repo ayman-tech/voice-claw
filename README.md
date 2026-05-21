@@ -10,6 +10,8 @@ The MVP is local-first:
 - RealtimeTTS with Piper for spoken replies.
 - Configurable Piper executable and voice model paths.
 
+![ss2](assets/ss2.png) ![ss3](assets/ss3.png)
+
 ## Architecture
 
 ```text
@@ -44,6 +46,7 @@ The MVP is local-first:
 ## Install
 
 Install uv from [Astral UV](https://docs.astral.sh/uv/getting-started/installation/)
+
 ```powershell
 uv sync
 ```
@@ -61,6 +64,7 @@ cd voice-claw
 Copy-Item .env.example .env # windows
 cp .env.example .env # linux or macOS
 ```
+
 Edit .env and set CLAW_TOKEN. The app reads .env automatically.
 
 ```powershell
@@ -116,6 +120,7 @@ Place an image at `assets/avatar.png` (or `.jpg` / `.jpeg`) to show it inside th
 ### Setup (once per session)
 
 1. Start the Gateway and run the app:
+   
    ```powershell
    openclaw gateway
    uv run main.py
