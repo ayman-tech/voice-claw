@@ -1,6 +1,6 @@
-# OpenClaw Voice
+# VoiceClaw
 
-PySide6 desktop voice companion for an existing OpenClaw Gateway session.
+Cross-Platform desktop voice companion for conversation with OpenClaw Agent
 
 The MVP is local-first:
 
@@ -8,7 +8,7 @@ The MVP is local-first:
 - RealtimeSTT with faster-whisper for transcription.
 - OpenClaw Gateway/WebChat WebSocket for session chat.
 - RealtimeTTS with Piper for spoken replies.
-- Configurable Piper executable and voice model paths, compatible with current `OHF-Voice/piper1-gpl` style installs and legacy `rhasspy/piper` installs.
+- Configurable Piper executable and voice model paths.
 
 ## Architecture
 
@@ -43,15 +43,10 @@ The MVP is local-first:
 
 ## Install
 
+Install uv from [Astral UV](https://docs.astral.sh/uv/getting-started/installation/)
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -e .
+uv sync
 ```
-
-RealtimeSTT/RealtimeTTS audio dependencies may require platform audio packages. On Windows, install any missing PortAudio/PyAudio wheels as prompted by pip.
-
-## Run
 
 Start OpenClaw separately:
 
@@ -62,26 +57,15 @@ openclaw gateway
 Optionally set the Gateway token through the environment:
 
 ```powershell
-Copy-Item .env.example .env
-# Edit .env and set CLAW_TOKEN. The app reads .env automatically.
+cd voice-claw
+Copy-Item .env.example .env # windows
+cp .env.example .env # linux or macOS
 ```
-
-Then run the app:
+Edit .env and set CLAW_TOKEN. The app reads .env automatically.
 
 ```powershell
-python main.py
+uv run main.py
 ```
-
-Defaults:
-
-- Gateway URL: `ws://127.0.0.1:18789`
-- Model target: `openclaw/default`
-- Session key: `webchat:voice-desktop`
-- STT model: `base`
-- STT language: `en`
-- STT device: `cpu`
-- STT compute type: `int8`
-- Piper voice: `models/piper/en_US-hfc_female-medium.onnx`
 
 ## Getting The Gateway Token
 
@@ -106,7 +90,8 @@ Alternatively, set `CLAW_TOKEN` in your shell or `.env`. The app uses `CLAW_TOKE
 You can also inspect the config manually:
 
 ```powershell
-Get-Content $HOME\.openclaw\openclaw.json
+Get-Content $HOME\.openclaw\openclaw.json # windows
+cat ~\.openclaw\openclaw.json # linux or macOS
 ```
 
 Look for:
@@ -121,6 +106,10 @@ Look for:
   }
 }
 ```
+
+## Personalisation
+
+Place an image at `assets/avatar.png` (or `.jpg` / `.jpeg`) to show it inside the orb, cropped to a circle. Square source images work best. If no file is present the orb falls back to the default gradient.
 
 ## How To Use
 
@@ -144,20 +133,6 @@ Look for:
 4. The reply appears in the transcript and is spoken aloud.
    Status returns to `Ready` when done.
 5. Repeat from step 1.
-
-### Stop button
-
-Use **Stop** only to interrupt a reply mid-speech — for example if the assistant is talking too long or you want to ask a follow-up immediately.
-It stops Piper and aborts the current run. Wait a moment, then click **Push To Talk** again.
-
-### What to watch in the transcript
-
-| You see | Means |
-|---|---|
-| `[history loaded]` | Connected successfully |
-| `user: <words>` | Your speech was transcribed and sent |
-| `assistant: <reply>` | Response received and spoken |
-| `assistant:` with nothing after it | Response came via history fallback — check logs |
 
 ### Things to avoid
 
