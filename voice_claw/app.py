@@ -498,35 +498,20 @@ def run() -> int:
             layout.setContentsMargins(24, 16, 24, 14)
             layout.setSpacing(6)
 
-            # Top bar: title+subtitle on left, status+button on right
+            # Top bar: title on left, connect button on right
             top_bar = QHBoxLayout()
             top_bar.setSpacing(12)
 
-            title_col = QVBoxLayout()
-            title_col.setSpacing(2)
-            title = QLabel("I'm Donna")
+            title = QLabel("Donna")
             title.setObjectName("title")
             title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             self._title_label = title
-            subtitle = QLabel("I know everything")
-            subtitle.setObjectName("subtitle")
-            subtitle.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-            title_col.addWidget(title)
-            title_col.addWidget(subtitle)
 
-            right_col = QVBoxLayout()
-            right_col.setSpacing(6)
-            right_col.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             self.connect_button = QPushButton("Connect")
-            self.status = QLabel("Disconnected")
-            self.status.setObjectName("status_label")
-            self.status.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            right_col.addWidget(self.connect_button, alignment=Qt.AlignmentFlag.AlignRight)
-            right_col.addWidget(self.status, alignment=Qt.AlignmentFlag.AlignRight)
 
-            top_bar.addLayout(title_col)
+            top_bar.addWidget(title)
             top_bar.addStretch()
-            top_bar.addLayout(right_col)
+            top_bar.addWidget(self.connect_button, alignment=Qt.AlignmentFlag.AlignRight)
             layout.addLayout(top_bar)
 
             layout.addSpacing(6)
@@ -539,6 +524,11 @@ def run() -> int:
             orb_row.addWidget(self.orb)
             orb_row.addStretch()
             layout.addLayout(orb_row)
+
+            self.status = QLabel("Disconnected")
+            self.status.setObjectName("status_label")
+            self.status.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
+            layout.addWidget(self.status, alignment=Qt.AlignmentFlag.AlignHCenter)
 
             layout.addSpacing(4)
 
@@ -627,6 +617,7 @@ def run() -> int:
             self.connect_button.setEnabled(True)
             self.orb.set_state("ready")
             self.set_status("Connected — tap the orb to speak")
+            self.stt.prewarm_import()
 
         def disconnect_gateway(self) -> None:
             self.tts.stop()
@@ -717,7 +708,7 @@ def run() -> int:
             self.tts.stop()
             self.orb.set_state("thinking")
             self.set_status("Preparing...")
-            QTimer.singleShot(600, self._start_transcription_delayed)
+            QTimer.singleShot(50, self._start_transcription_delayed)
 
         def _on_stt_ready(self) -> None:
             self.orb.set_state("listening")

@@ -150,6 +150,14 @@ class STTService:
         self.config = config
         self.on_error = on_error
 
+    def prewarm_import(self) -> None:
+        def _do() -> None:
+            try:
+                from RealtimeSTT import AudioToTextRecorder  # noqa: F401
+            except Exception:
+                pass
+        threading.Thread(target=_do, daemon=True, name="stt-import-warmup").start()
+
     def transcribe_once(self, on_ready: Callable[[], None] | None = None) -> str:
         from RealtimeSTT import AudioToTextRecorder
 
