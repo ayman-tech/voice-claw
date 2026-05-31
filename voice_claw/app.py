@@ -759,8 +759,13 @@ def run() -> int:
 
         def handle_delta(self, delta: AssistantDelta) -> None:
             text_to_append = delta.text
-            if delta.final and self.pending_assistant_text and text_to_append.startswith(self.pending_assistant_text):
-                text_to_append = text_to_append[len(self.pending_assistant_text):]
+            if self.pending_assistant_text:
+                if text_to_append.startswith(self.pending_assistant_text):
+                    # Strip already-spoken prefix (gateway resends full text via chat event)
+                    text_to_append = text_to_append[len(self.pending_assistant_text):]
+                elif self.pending_assistant_text.startswith(text_to_append):
+                    # Entire delta already spoken — skip (exact duplicate from chat event)
+                    text_to_append = ""
 
             if text_to_append:
                 if not self.pending_assistant_text:

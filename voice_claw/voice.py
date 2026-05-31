@@ -13,13 +13,16 @@ from .config import AppConfig
 
 
 LOGGER = logging.getLogger(__name__)
-SENTENCE_RE = re.compile(r"(.+?[.!?](?:\s+|$))", re.DOTALL)
+SENTENCE_RE = re.compile(r"(.+?(?<![A-Z])[.!?](?:\s+|$))", re.DOTALL)
 
 _MD_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
 _MD_ITALIC_RE = re.compile(r"\*(.+?)\*")
 _MD_CODE_RE = re.compile(r"`(.+?)`")
 _MD_HEADING_RE = re.compile(r"^#{1,6}\s+", re.MULTILINE)
-_SENTENCE_SPACE_RE = re.compile(r"([.!?])([A-Z])")
+# Only add space when 2+ chars precede the punctuation — avoids splitting abbreviations like D.C.
+_SENTENCE_SPACE_RE = re.compile(r"(\w{2,}[.!?])([A-Z])")
+# Strip dots from single-letter abbreviations so D.C. → DC, U.S.A. → USA (prevents "dot" pronunciation)
+_ABBREV_RE = re.compile(r"\b([A-Z])\.")
 
 
 def _clean_for_tts(text: str) -> str:
@@ -27,7 +30,9 @@ def _clean_for_tts(text: str) -> str:
     text = _MD_ITALIC_RE.sub(r"\1", text)
     text = _MD_CODE_RE.sub(r"\1", text)
     text = _MD_HEADING_RE.sub("", text)
+    text = _ABBREV_RE.sub(r"\1", text)
     text = _SENTENCE_SPACE_RE.sub(r"\1 \2", text)
+    text = re.sub(r"\.$", ".  ", text)
     return text
 
 _ASSETS_DIR = Path(__file__).parent.parent / "assets"
