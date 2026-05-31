@@ -15,6 +15,21 @@ from .config import AppConfig
 LOGGER = logging.getLogger(__name__)
 SENTENCE_RE = re.compile(r"(.+?[.!?](?:\s+|$))", re.DOTALL)
 
+_MD_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
+_MD_ITALIC_RE = re.compile(r"\*(.+?)\*")
+_MD_CODE_RE = re.compile(r"`(.+?)`")
+_MD_HEADING_RE = re.compile(r"^#{1,6}\s+", re.MULTILINE)
+_SENTENCE_SPACE_RE = re.compile(r"([.!?])([A-Z])")
+
+
+def _clean_for_tts(text: str) -> str:
+    text = _MD_BOLD_RE.sub(r"\1", text)
+    text = _MD_ITALIC_RE.sub(r"\1", text)
+    text = _MD_CODE_RE.sub(r"\1", text)
+    text = _MD_HEADING_RE.sub("", text)
+    text = _SENTENCE_SPACE_RE.sub(r"\1 \2", text)
+    return text
+
 _ASSETS_DIR = Path(__file__).parent.parent / "assets"
 _SOUND_LONG = str(_ASSETS_DIR / "interface-long.wav")
 _SOUND_SHORT = str(_ASSETS_DIR / "interface-short.wav")
@@ -72,6 +87,9 @@ class TTSService:
                 self._report_error("TTS is not configured: set the Piper voice .onnx path.")
             return
         try:
+            text = _clean_for_tts(text)
+            if not text.strip():
+                return
             LOGGER.info("Speaking text via TTS: chars=%s", len(text))
             stream = self._get_stream()
             stream.feed(text)
@@ -135,12 +153,22 @@ class TTSService:
 def _play_sound(path: str) -> None:
     """Play a WAV file without blocking the caller."""
     try:
-        import winsound
-        threading.Thread(
-            target=winsound.PlaySound,
-            args=(path, winsound.SND_FILENAME),
-            daemon=True,
-        ).start()
+        import sys
+        if sys.platform == "win32":
+            import winsound
+            threading.Thread(
+                target=winsound.PlaySound,
+                args=(path, winsound.SND_FILENAME),
+                daemon=True,
+            ).start()
+        elif sys.platform == "darwin":
+            import subprocess
+            threading.Thread(
+                target=subprocess.run,
+                args=(["afplay", path],),
+                kwargs={"capture_output": True},
+                daemon=True,
+            ).start()
     except Exception:
         pass
 

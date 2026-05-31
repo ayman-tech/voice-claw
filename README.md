@@ -130,7 +130,7 @@ Place an image at `assets/avatar.png` (or `.jpg` / `.jpeg`) to show it inside th
 
 ### Each conversation turn
 
-1. **Click "Push To Talk"** — the status changes to `Listening...`.
+1. **Click the orb or press `Ctrl+Shift+Z`** — the status changes to `Listening...`.
    Wait about a second before speaking; the app clears any audio echo first.
 2. **Speak your message** naturally, then stop talking.
    The app detects ~1–2 seconds of silence to know you are done, then shows `Sending...`.
@@ -209,3 +209,29 @@ Piper speech requires a voice model:
 - `Piper executable`: optional if `piper`/`piper.exe` is already on `PATH`.
 - `Piper voice .onnx`: required.
 - `Piper config .json`: optional; Piper can often derive it from `<voice>.onnx.json`.
+
+### macOS Piper setup
+
+`RealtimeTTS` defaults to looking for `piper.exe`, which does not exist on macOS. Use the `piper-tts` Python package instead:
+
+1. Install the wheel bundled in `assets/`:
+
+```sh
+uv pip install assets/piper_tts-1.4.2-cp39-abi3-macosx_11_0_arm64.whl
+```
+
+2. Download the voice model into `models/piper/`:
+
+```sh
+mkdir -p models/piper
+uv run python -m piper.download_voices --download-dir models/piper en_US-hfc_female-medium
+```
+
+3. Set the paths in `.env`:
+
+```sh
+PIPER_EXECUTABLE=/absolute/path/to/voice-claw/.venv/bin/piper
+PIPER_MODEL_PATH=/absolute/path/to/voice-claw/models/piper/en_US-hfc_female-medium.onnx
+```
+
+The `.onnx.json` config is downloaded alongside the model and picked up automatically.

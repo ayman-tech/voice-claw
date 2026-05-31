@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,7 @@ class AppConfig:
     agent_id: str = ""
     session_key: str = "webchat:voice-desktop"
     message_channel: str = "webchat"
+    device_id: str = ""
     stt_model: str = "base"
     stt_language: str = "en"
     stt_device: str = "cpu"
@@ -84,7 +86,9 @@ def load_config(path: Path | None = None, dotenv_path: Path = Path(".env")) -> A
     load_dotenv(dotenv_path)
     target = path or config_path()
     if not target.exists():
-        return _with_env_overrides(AppConfig())
+        config = _with_env_overrides(AppConfig(device_id=str(uuid.uuid4())))
+        save_config(config, target)
+        return config
 
     try:
         raw = json.loads(target.read_text(encoding="utf-8"))
@@ -95,7 +99,11 @@ def load_config(path: Path | None = None, dotenv_path: Path = Path(".env")) -> A
     merged: dict[str, Any] = defaults | {
         key: value for key, value in raw.items() if key in defaults
     }
-    return _with_env_overrides(AppConfig(**merged))
+    config = _with_env_overrides(AppConfig(**merged))
+    if not config.device_id:
+        config = AppConfig(**{**asdict(config), "device_id": str(uuid.uuid4())})
+        save_config(config, target)
+    return config
 
 
 def save_config(config: AppConfig, path: Path | None = None) -> Path:

@@ -30,11 +30,9 @@ class AsyncRunner:
 
     def stop(self) -> None:
         async def _cancel_all() -> None:
-            tasks = [t for t in asyncio.all_tasks(self.loop) if not t.done()]
-            for task in tasks:
-                task.cancel()
-            if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
+            for task in asyncio.all_tasks(self.loop):
+                if not task.done():
+                    task.cancel()
             self.loop.stop()
 
         asyncio.run_coroutine_threadsafe(_cancel_all(), self.loop)
@@ -778,9 +776,9 @@ def run() -> int:
                 self.response_timeout_timer.stop()
                 self.tts_flush_timer.stop()
                 self.tts.speak_delta("", final=True)
-            if delta.final:
-                self.pending_assistant_text = ""
-                # Orb stays "speaking" until on_audio_stream_stop fires via _on_tts_audio_done
+            # pending_assistant_text is cleared by send_user_text at the start of the next turn,
+            # keeping it non-empty here so _on_run_ended's guard fires correctly and skips the
+            # fallback history fetch (which would re-speak the same response).
 
         def flush_tts_tail(self) -> None:
             LOGGER.info("Flushing TTS after assistant stream idle")
@@ -835,21 +833,39 @@ def run() -> int:
                 self.start_transcription()
 
         def _register_hotkey(self) -> None:
-            try:
-                import keyboard
-                self._hotkey_handle = keyboard.add_hotkey(
-                    "alt+z", self.bridge.hotkey_ptt.emit, suppress=False
-                )
-                LOGGER.info("Global hotkey registered: Alt+Z")
-            except Exception as exc:
-                LOGGER.warning("Could not register global hotkey: %s", exc)
-                self._hotkey_handle = None
+            self._hotkey_handle = None
+            self._hotkey_listener = None
+            if sys.platform == "darwin":
+                # keyboard module triggers CFData assertion crash on macOS; use pynput instead
+                try:
+                    from pynput import keyboard as pynput_kb
+                    self._hotkey_listener = pynput_kb.GlobalHotKeys(
+                        {"<ctrl>+<shift>+z": self.bridge.hotkey_ptt.emit}
+                    )
+                    self._hotkey_listener.start()
+                    LOGGER.info("Global hotkey registered via pynput: Ctrl+Shift+Z")
+                except Exception as exc:
+                    LOGGER.warning("Could not register global hotkey: %s", exc)
+            else:
+                try:
+                    import keyboard
+                    self._hotkey_handle = keyboard.add_hotkey(
+                        "ctrl+shift+z", self.bridge.hotkey_ptt.emit, suppress=False
+                    )
+                    LOGGER.info("Global hotkey registered: Ctrl+Shift+Z")
+                except Exception as exc:
+                    LOGGER.warning("Could not register global hotkey: %s", exc)
 
         def closeEvent(self, event: object) -> None:
             if self._hotkey_handle is not None:
                 try:
                     import keyboard
                     keyboard.remove_hotkey(self._hotkey_handle)
+                except Exception:
+                    pass
+            if self._hotkey_listener is not None:
+                try:
+                    self._hotkey_listener.stop()
                 except Exception:
                     pass
             if self.client:
