@@ -771,6 +771,7 @@ def run() -> int:
                 if not self.pending_assistant_text:
                     self.response_timeout_timer.stop()
                     self.orb.set_state("speaking")
+                    self.set_status("Speaking...")
                     self.chat.start_assistant()
                 self.pending_assistant_text += text_to_append
                 self.chat.append_assistant(text_to_append)

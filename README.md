@@ -71,6 +71,24 @@ Edit .env and set CLAW_TOKEN. The app reads .env automatically.
 uv run main.py
 ```
 
+## macOS App
+
+To create a double-clickable macOS app bundle:
+
+```sh
+scripts/build_macos_app.sh
+```
+
+This creates:
+
+```text
+dist/VoiceClaw.app
+```
+
+You can open it from Finder, or copy it to `/Applications`. The app bundle launches the project through `.venv/bin/python`, loads `.env` from the project folder, and re-runs `uv sync` if the virtual environment is missing.
+
+On first launch, macOS may ask for microphone permission. To use the global `Ctrl+Shift+Z` hotkey, also allow VoiceClaw in **System Settings > Privacy & Security > Accessibility**. Clicking the orb works without Accessibility permission.
+
 ## Getting The Gateway Token
 
 OpenClaw usually stores the Gateway token in `~/.openclaw/openclaw.json` under `gateway.auth.token`.
