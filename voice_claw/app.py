@@ -8,11 +8,12 @@ from concurrent.futures import Future
 import logging
 import sys
 import threading
-from collections.abc import Callable
+import time
 
-from .config import AppConfig, load_config
+from .config import AppConfig, load_config, load_dotenv
 from .app_logging import setup_logging
-from .openclaw_client import AssistantDelta, OpenClawClient, extract_text
+from .openclaw_client import ChatFrame, OpenClawClient, extract_text
+from .assistant_text import AssistantTextTracker
 from .voice import STTService, TTSService
 
 
@@ -41,34 +42,6 @@ class AsyncRunner:
     def _run(self) -> None:
         asyncio.set_event_loop(self.loop)
         self.loop.run_forever()
-
-
-class TranscriptionThread:
-    def __init__(
-        self,
-        stt: STTService,
-        on_text: Callable[[str], None],
-        on_error: Callable[[str], None],
-        on_done: Callable[[], None],
-        on_ready: Callable[[], None] | None = None,
-    ) -> None:
-        self.stt = stt
-        self.on_text = on_text
-        self.on_error = on_error
-        self.on_done = on_done
-        self.on_ready = on_ready
-        self.thread = threading.Thread(target=self._run, name="openclaw-stt", daemon=True)
-
-    def start(self) -> None:
-        self.thread.start()
-
-    def _run(self) -> None:
-        try:
-            text = self.stt.transcribe_once(on_ready=self.on_ready)
-            if text:
-                self.on_text(text)
-        finally:
-            self.on_done()
 
 
 _DARK_STYLESHEET = """
@@ -154,6 +127,7 @@ def run() -> int:
         QVBoxLayout,
         QWidget,
     )
+    load_dotenv()  # before logging, so VOICECLAW_LOG_LEVEL from .env takes effect
     setup_logging()
     LOGGER.info("Starting OpenClaw Voice")
 
@@ -168,6 +142,7 @@ def run() -> int:
         error = Signal(str)
         user_text = Signal(str)
         stt_ready = Signal()
+        stt_wake = Signal()
         stt_done = Signal()
         tts_audio_done = Signal()
         run_ended = Signal()
@@ -238,6 +213,8 @@ def run() -> int:
             if self._state == state:
                 return
             self._state = state
+            # Full 60 fps only while rings/arcs animate; idle states look the same at 30 fps.
+            self._timer.setInterval(16 if state in ("listening", "thinking", "speaking") else 33)
             if state == "listening":
                 self._ring_phase = 0.0
 
@@ -456,10 +433,13 @@ def run() -> int:
             self.tts = TTSService(self.config, self.show_error, on_audio_done=self.bridge.tts_audio_done.emit)
             self.stt = STTService(self.config, self.show_error)
             self.pending_assistant_text = ""
+            self.text_tracker = AssistantTextTracker()
+            self._turn_sent_at = 0.0
+            self._turn_first_text_at = 0.0
             self._history_message_count = 0
             self.tts_flush_timer = QTimer(self)
             self.tts_flush_timer.setSingleShot(True)
-            self.tts_flush_timer.setInterval(1200)
+            self.tts_flush_timer.setInterval(600)
             self.tts_flush_timer.timeout.connect(self.flush_tts_tail)
             self.response_timeout_timer = QTimer(self)
             self.response_timeout_timer.setSingleShot(True)
@@ -482,6 +462,7 @@ def run() -> int:
             self.bridge.error.connect(self.show_error)
             self.bridge.user_text.connect(self.send_user_text)
             self.bridge.stt_ready.connect(self._on_stt_ready)
+            self.bridge.stt_wake.connect(self._on_stt_ready)
             self.bridge.stt_done.connect(self._on_stt_done)
             self.bridge.tts_audio_done.connect(self._on_tts_audio_done)
             self.bridge.run_ended.connect(self._on_run_ended)
@@ -548,24 +529,32 @@ def run() -> int:
                 self.stop_current()
             # listening: ignore (STT is running in background)
 
+        def _ready_text(self) -> str:
+            if self.stt.wake_enabled:
+                return "Ready — say 'Hey Donna' or tap the orb"
+            return "Ready — tap the orb to speak"
+
+        def _set_ready(self) -> None:
+            self.orb.set_state("ready")
+            self.set_status(self._ready_text())
+            self.stt.resume()
+
         def _on_stt_done(self) -> None:
-            # If STT finished but produced no text (no send_user_text call), return to ready.
+            # STT turn produced no text (noise, or wake word with no speech) — back to ready.
             if self.orb.state in ("listening", "thinking"):
-                self.orb.set_state("ready")
-                self.set_status("Ready — tap the orb to speak")
+                self._set_ready()
 
         def _on_tts_audio_done(self) -> None:
             # Audio finished playing — return orb to ready if still showing speaking.
             if self.orb.state == "speaking":
-                self.orb.set_state("ready")
-                self.set_status("Ready — tap the orb to speak")
+                self._set_ready()
 
         def _sync_fields_from_config(self) -> None:
             tts_state = "configured" if self.config.piper_model_path else "missing Piper voice"
             token_state = "token set" if self.config.auth_token else "token missing"
             self.summary = (
                 f"{self.config.gateway_url} | session {self.config.session_key} | "
-                f"STT {self.config.stt_model}/{self.config.stt_language}/{self.config.stt_device} | "
+                f"STT {self.config.stt_model}/{self.config.stt_device} | "
                 f"TTS {tts_state} | {token_state}"
             )
             self._title_label.setToolTip(self.summary)
@@ -575,10 +564,18 @@ def run() -> int:
             self._sync_fields_from_config()
 
         def save_settings(self) -> None:
+            old = self.config
             self._sync_config_from_fields()
             self.tts = TTSService(self.config, self.show_error, on_audio_done=self.bridge.tts_audio_done.emit)
-            self.stt.shutdown()
-            self.stt = STTService(self.config, self.show_error)
+            stt_fields = (
+                "stt_model", "stt_device", "stt_compute_type", "stt_silence_duration",
+                "stt_initial_prompt", "wake_word_enabled", "wake_word_model_path",
+                "wake_word_sensitivity",
+            )
+            if any(getattr(old, f) != getattr(self.config, f) for f in stt_fields):
+                # Keep the loaded recorder across reconnects unless its settings changed.
+                self.stt.shutdown()
+                self.stt = STTService(self.config, self.show_error)
             self.set_status("Settings loaded")
 
         def _on_connect_button(self) -> None:
@@ -591,9 +588,10 @@ def run() -> int:
             self.save_settings()
             self.connect_button.setEnabled(False)
             self.set_status("Connecting...")
+            self._close_client()
             self.client = OpenClawClient(
                 self.config,
-                on_delta=self.bridge.delta.emit,
+                on_chat=self.bridge.delta.emit,
                 on_status=self.bridge.status.emit,
                 on_run_ended=self.bridge.run_ended.emit,
                 on_disconnect=self.bridge.gateway_disconnected.emit,
@@ -615,10 +613,18 @@ def run() -> int:
             self.connect_button.setEnabled(True)
             self.orb.set_state("ready")
             self.set_status("Connected — tap the orb to speak")
-            self.stt.prewarm_import()
+            self.tts.warmup()
+            self.stt.start(
+                on_text=self.bridge.user_text.emit,
+                on_idle=self.bridge.stt_done.emit,
+                on_wake=self.bridge.stt_wake.emit,
+            )
+            self.stt.prewarm()
+            self.stt.resume()
 
         def disconnect_gateway(self) -> None:
             self.tts.stop()
+            self.stt.pause()
             self.connect_button.setEnabled(False)
             self.set_status("Disconnecting...")
             if self.client:
@@ -626,8 +632,6 @@ def run() -> int:
                 future.add_done_callback(self.bridge.aborted.emit)
             else:
                 self._reset_to_disconnected()
-            self.tts.warmup()
-            self.load_history()
 
         def load_history(self) -> None:
             if not self.client:
@@ -639,8 +643,8 @@ def run() -> int:
             try:
                 response = future.result()
             except Exception as exc:
-                LOGGER.exception("Could not load history")
-                self.show_error(f"Could not load history: {exc}")
+                # Informational only; never worth a modal dialog.
+                LOGGER.warning("Could not load history: %r", exc)
                 return
             payload = response.get("payload", {}) if isinstance(response, dict) else {}
             messages = payload.get("messages", []) if isinstance(payload, dict) else []
@@ -649,12 +653,20 @@ def run() -> int:
 
         def _on_run_ended(self) -> None:
             self.response_timeout_timer.stop()
+            if self._turn_sent_at:
+                LOGGER.info(
+                    "Turn summary: reply_chars=%s skipped_replays=%s total=%.2fs",
+                    len(self.pending_assistant_text),
+                    self.text_tracker.skipped,
+                    time.monotonic() - self._turn_sent_at,
+                )
+                self._turn_sent_at = 0.0  # runs end more than once; summarise a turn once
             if self.pending_assistant_text:
                 return
             if not self.client:
                 return
-            LOGGER.info("Run ended with no streamed text — scheduling fallback history fetch in 2 s")
-            QTimer.singleShot(2000, self._fetch_fallback_history)
+            LOGGER.info("Run ended with no streamed text — scheduling fallback history fetch in 0.5 s")
+            QTimer.singleShot(500, self._fetch_fallback_history)
 
         def _fetch_fallback_history(self) -> None:
             if self.pending_assistant_text:
@@ -683,6 +695,10 @@ def run() -> int:
                 if not isinstance(item, dict):
                     continue
                 role = item.get("role", "")
+                if role == "user":
+                    # Everything older than this turn's message is a previous answer; speaking
+                    # it would answer the old question again.
+                    break
                 if role not in {"assistant", "model"}:
                     continue
                 stop_reason = item.get("stopReason", "")
@@ -697,6 +713,7 @@ def run() -> int:
                     continue
                 self.chat.start_assistant()
                 self.chat.append_assistant(body)
+                self.stt.pause()
                 self.orb.set_state("speaking")
                 self.set_status("Speaking...")
                 self.tts.speak(body)
@@ -704,29 +721,23 @@ def run() -> int:
 
         def start_transcription(self) -> None:
             self.tts.stop()
-            self.orb.set_state("thinking")
-            self.set_status("Preparing...")
-            QTimer.singleShot(50, self._start_transcription_delayed)
+            self.stt.trigger_manual()
+            self._on_stt_ready()
 
         def _on_stt_ready(self) -> None:
             self.orb.set_state("listening")
             self.set_status("Listening...")
 
-        def _start_transcription_delayed(self) -> None:
-            worker = TranscriptionThread(
-                self.stt,
-                on_text=self.bridge.user_text.emit,
-                on_error=self.bridge.error.emit,
-                on_done=self.bridge.stt_done.emit,
-                on_ready=self.bridge.stt_ready.emit,
-            )
-            worker.start()
-
         def send_user_text(self, text: str) -> None:
             if not self.client:
                 self.show_error("Connect to OpenClaw Gateway before speaking.")
                 return
+            self.stt.pause()
+            self.tts.stop()  # a new turn supersedes anything still queued or playing from the last one
             self.pending_assistant_text = ""
+            self.text_tracker.reset()
+            self._turn_sent_at = time.monotonic()
+            self._turn_first_text_at = 0.0
             self.chat.add_user(text)
             LOGGER.info("Sending transcribed user text: chars=%s", len(text))
             self.orb.set_state("thinking")
@@ -757,28 +768,30 @@ def run() -> int:
             LOGGER.warning("Response timeout — falling back to history fetch")
             self._fetch_fallback_history()
 
-        def handle_delta(self, delta: AssistantDelta) -> None:
-            text_to_append = delta.text
-            if self.pending_assistant_text:
-                if text_to_append.startswith(self.pending_assistant_text):
-                    # Strip already-spoken prefix (gateway resends full text via chat event)
-                    text_to_append = text_to_append[len(self.pending_assistant_text):]
-                elif self.pending_assistant_text.startswith(text_to_append):
-                    # Entire delta already spoken — skip (exact duplicate from chat event)
-                    text_to_append = ""
+        def handle_delta(self, frame: ChatFrame) -> None:
+            text_to_append = self.text_tracker.feed(frame)
+            final = frame.terminal
 
             if text_to_append:
                 if not self.pending_assistant_text:
+                    self._turn_first_text_at = time.monotonic()
+                    if self._turn_sent_at:
+                        LOGGER.info("Latency: first reply text %.2fs after send", self._turn_first_text_at - self._turn_sent_at)
                     self.response_timeout_timer.stop()
+                    self.stt.pause()
                     self.orb.set_state("speaking")
                     self.set_status("Speaking...")
                     self.chat.start_assistant()
                 self.pending_assistant_text += text_to_append
                 self.chat.append_assistant(text_to_append)
-                self.tts.speak_delta(text_to_append, final=delta.final)
-                if not delta.final:
+                self.tts.speak_delta(text_to_append, final=final)
+                if not final:
                     self.tts_flush_timer.start()
-            if delta.final:
+            if final:
+                if frame.state == "error":
+                    LOGGER.warning("Run failed: %s", frame.error)
+                    if not self.pending_assistant_text:
+                        self.set_status(f"Error: {frame.error or 'run failed'}")
                 self.response_timeout_timer.stop()
                 self.tts_flush_timer.stop()
                 self.tts.speak_delta("", final=True)
@@ -798,8 +811,15 @@ def run() -> int:
             self.orb.set_state("thinking")
             self.set_status("Stopping...")
 
+        def _close_client(self) -> None:
+            # Close the websocket so a dropped or replaced client stops delivering events;
+            # otherwise every reconnect leaves another live client and replies get doubled.
+            client, self.client = self.client, None
+            if client is not None:
+                self.runner.submit(client.close())
+
         def _reset_to_disconnected(self) -> None:
-            self.client = None
+            self._close_client()
             self.orb.set_state("disconnected")
             self.connect_button.setText("Connect")
             self.connect_button.setEnabled(True)
@@ -823,8 +843,7 @@ def run() -> int:
             if disconnecting:
                 self._reset_to_disconnected()
             else:
-                self.orb.set_state("ready")
-                self.set_status("Ready")
+                self._set_ready()
 
         def set_status(self, text: str) -> None:
             self.status.setText(text)

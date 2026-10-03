@@ -4,7 +4,7 @@ Cross-Platform desktop voice companion for conversation with OpenClaw Agent
 
 The MVP is local-first:
 
-- Push-to-talk voice input.
+- Push-to-talk voice input, or hands-free with the "Hey Donna" wake word (openWakeWord).
 - RealtimeSTT with faster-whisper for transcription.
 - OpenClaw Gateway/WebChat WebSocket for session chat.
 - RealtimeTTS with Piper for spoken replies.
@@ -70,6 +70,21 @@ Edit .env and set CLAW_TOKEN. The app reads .env automatically.
 ```powershell
 uv run main.py
 ```
+
+## Wake word ("Hey Donna")
+
+Wake word detection runs locally with [openWakeWord](https://github.com/dscripka/openWakeWord)
+whenever the orb is in the ready state. The mic is closed while Donna is thinking or speaking.
+Orb click and Ctrl+Shift+Z still work.
+
+There is no pretrained "hey donna" model, so train one (synthetic data, no recordings needed) with the
+openWakeWord automatic training Colab notebook, then save the result as `models/wake/hey_donna.onnx`.
+Until that file exists the app runs push-to-talk only. To try the wiring first, point
+`VOICECLAW_WAKE_MODEL` at a bundled model such as `hey_jarvis_v0.1.onnx` from the installed
+`openwakeword/resources/models` folder.
+
+Settings: `VOICECLAW_WAKE_WORD=0` disables it, `VOICECLAW_WAKE_SENSITIVITY` (default 0.5) tunes
+false triggers vs misses. The base openWakeWord models download automatically on first launch.
 
 ## macOS App
 
@@ -220,7 +235,7 @@ result = subprocess.run(
 
 ## Language And Speech
 
-The app defaults STT language to `en` and wraps each voice turn with an instruction asking OpenClaw to reply in English only.
+The app is English-only (`base.en` Whisper model, language fixed to `en`) and wraps each voice turn with an instruction asking OpenClaw to reply in English only.
 
 Piper speech requires a voice model:
 

@@ -30,12 +30,14 @@ class AppConfig:
     session_key: str = "webchat:voice-desktop"
     message_channel: str = "webchat"
     device_id: str = ""
-    stt_model: str = "base"
-    stt_language: str = "en"
+    stt_model: str = "base.en"
     stt_device: str = "cpu"
     stt_compute_type: str = "int8"
-    stt_silence_duration: float = 1.5
+    stt_silence_duration: float = 0.8
     stt_initial_prompt: str = "Donna"
+    wake_word_enabled: bool = True
+    wake_word_model_path: str = "models/wake/hey_donna.onnx"
+    wake_word_sensitivity: float = 0.5
     piper_executable: str = ""
     piper_model_path: str = ""
     piper_config_path: str = ""
@@ -50,15 +52,28 @@ ENV_CONFIG_MAP = {
     "VOICECLAW_SESSION_KEY": "session_key",
     "VOICECLAW_MESSAGE_CHANNEL": "message_channel",
     "VOICECLAW_STT_MODEL": "stt_model",
-    "VOICECLAW_STT_LANGUAGE": "stt_language",
     "VOICECLAW_STT_DEVICE": "stt_device",
     "VOICECLAW_STT_COMPUTE_TYPE": "stt_compute_type",
     "VOICECLAW_STT_SILENCE": "stt_silence_duration",
     "VOICECLAW_STT_PROMPT": "stt_initial_prompt",
+    "VOICECLAW_WAKE_WORD": "wake_word_enabled",
+    "VOICECLAW_WAKE_MODEL": "wake_word_model_path",
+    "VOICECLAW_WAKE_SENSITIVITY": "wake_word_sensitivity",
     "PIPER_EXECUTABLE": "piper_executable",
     "PIPER_MODEL_PATH": "piper_model_path",
     "PIPER_CONFIG_PATH": "piper_config_path",
 }
+
+
+def _parse_env_value(raw: str) -> str:
+    """Quoted values are taken literally; unquoted ones end at an inline ' #' comment."""
+    value = raw.strip()
+    if value[:1] in {'"', "'"}:
+        end = value.find(value[0], 1)
+        if end != -1:
+            return value[1:end]
+        return value[1:]
+    return value.split(" #", 1)[0].strip()
 
 
 def load_dotenv(path: Path = Path(".env")) -> None:
@@ -74,8 +89,7 @@ def load_dotenv(path: Path = Path(".env")) -> None:
             continue
         key, value = stripped.split("=", 1)
         key = key.strip()
-        value = value.strip().strip('"').strip("'")
-        os.environ.setdefault(key, value)
+        os.environ.setdefault(key, _parse_env_value(value))
 
 
 def config_path() -> Path:
@@ -116,10 +130,21 @@ def save_config(config: AppConfig, path: Path | None = None) -> Path:
     return target
 
 
+def _coerce(value: str, current: Any) -> Any:
+    if isinstance(current, bool):
+        return value.strip().lower() not in {"0", "false", "no", "off"}
+    if isinstance(current, float):
+        try:
+            return float(value)
+        except ValueError:
+            return current
+    return value
+
+
 def _with_env_overrides(config: AppConfig) -> AppConfig:
     values = asdict(config)
     for env_name, field_name in ENV_CONFIG_MAP.items():
         env_value = os.environ.get(env_name)
         if env_value:
-            values[field_name] = env_value
+            values[field_name] = _coerce(env_value, values[field_name])
     return AppConfig(**values)

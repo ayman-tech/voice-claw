@@ -7,11 +7,12 @@ import json
 import logging
 import platform
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 from .config import AppConfig
+from .app_logging import preview
 
 
 JsonObject = dict[str, Any]
@@ -19,11 +20,39 @@ LOGGER = logging.getLogger(__name__)
 PROTOCOL_VERSION = 4
 
 
+# Without this capability the Gateway also streams every assistant text twice more to us as
+# `agent` events (items). We only consume `chat` events, so ask it not to send those.
+CAP_CHAT_ONLY_ASSISTANT_TEXT = "chat-only-assistant-text"
+
+
+# `chat` event states. Before any text the Gateway sends "status" frames (phase=preparing_workspace,
+# preparing_context, starting_model); "delta" frames stream the reply; the run ends with exactly one
+# of final / aborted / error.
+CHAT_TERMINAL_STATES = frozenset({"final", "aborted", "error"})
+
+
 @dataclass(slots=True)
-class AssistantDelta:
-    text: str
-    final: bool = False
-    run_id: str | None = None
+class ChatFrame:
+    """One `chat` event for a run.
+
+    For `state="delta"`, `delta_text` is the text added since the previous delta, or the whole
+    reply when `replace` is set (the Gateway rewrote it, e.g. dropped an interim "On it." lead-in).
+    Only some deltas also carry the reply so far in `text`. Terminal events carry the final text.
+    """
+
+    run_id: str
+    state: str
+    text: str | None = None
+    delta_text: str = ""
+    replace: bool = False
+    stop_reason: str | None = None
+    error: str | None = None
+    yielded: bool = False
+    phase: str | None = None
+
+    @property
+    def terminal(self) -> bool:
+        return self.state in CHAT_TERMINAL_STATES
 
 
 ENGLISH_ONLY_PREFIX = (
@@ -61,7 +90,7 @@ def connect_request(config: AppConfig, request_id: str | None = None) -> JsonObj
         },
         "role": "operator",
         "scopes": ["operator.read", "operator.write"],
-        "caps": [],
+        "caps": [CAP_CHAT_ONLY_ASSISTANT_TEXT],
         "commands": [],
         "permissions": {},
         "locale": "en-US",
@@ -145,93 +174,56 @@ def extract_text(value: Any) -> str:
     return str(value)
 
 
-_LIFECYCLE_STRINGS = frozenset({
-    "final", "complete", "completed", "started", "running", "pending",
-    "error", "aborted", "cancelled", "done", "idle", "active",
-})
-
-
-def extract_assistant_delta(message: JsonObject) -> AssistantDelta | None:
-    """Normalize likely OpenClaw chat event shapes into assistant text deltas.
-
-    OpenClaw's Gateway protocol has moved over time, so this accepts a few
-    compatible shapes while keeping UI/TTS code stable.
-    """
-
-    method = message.get("event") if message.get("type") == "event" else message.get("method")
-    if method not in {"chat", "chat.event", "chat.delta", "chat.message", "chat.response", "agent"}:
+def parse_chat_event(message: JsonObject) -> ChatFrame | None:
+    """Parse a protocol-v4 `chat` event, or return None for anything else."""
+    if message.get("type") != "event" or message.get("event") != "chat":
         return None
-
-    payload = message.get("params") or message.get("payload") or message.get("data") or {}
+    payload = message.get("payload")
     if not isinstance(payload, dict):
         return None
-
-    nested_message = payload.get("message") if isinstance(payload.get("message"), dict) else {}
-    nested_data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
-    nested_state = payload.get("state") if isinstance(payload.get("state"), dict) else {}
-    role = (
-        payload.get("role")
-        or payload.get("senderRole")
-        or nested_message.get("role")
-        or nested_data.get("role")
-        or nested_state.get("role")
-    )
-    kind = (
-        payload.get("kind")
-        or payload.get("type")
-        or payload.get("event")
-        or nested_data.get("kind")
-        or nested_data.get("type")
-        or nested_data.get("event")
-        or nested_state.get("kind")
-        or nested_state.get("type")
-        or nested_state.get("event")
-    )
-    if role and role != "assistant":
-        return None
-    if kind and "tool" in str(kind).lower():
+    run_id = payload.get("runId")
+    state = payload.get("state")
+    if not isinstance(run_id, str) or not isinstance(state, str):
         return None
 
-    text = extract_text(payload)
-    if text.strip().lower() in _LIFECYCLE_STRINGS:
-        text = ""
-
-    final = bool(
-        payload.get("final")
-        or payload.get("done")
-        or payload.get("isFinal")
-        or nested_data.get("final")
-        or nested_data.get("done")
-        or nested_data.get("isFinal")
-        or nested_state.get("final")
-        or nested_state.get("done")
-        or nested_state.get("isFinal")
-        or str(kind).lower() in {"final", "complete", "completed", "message", "assistant_message", "assistant-message"}
+    raw_message = payload.get("message")
+    text = extract_text(raw_message) if isinstance(raw_message, dict) else None
+    delta_text = payload.get("deltaText")
+    stop_reason = payload.get("stopReason")
+    error = payload.get("errorMessage")
+    return ChatFrame(
+        run_id=run_id,
+        state=state,
+        text=text,
+        delta_text=delta_text if isinstance(delta_text, str) else "",
+        replace=payload.get("replace") is True,
+        stop_reason=stop_reason if isinstance(stop_reason, str) else None,
+        error=error if isinstance(error, str) else None,
+        yielded=payload.get("yielded") is True,
+        phase=payload.get("phase") if isinstance(payload.get("phase"), str) else None,
     )
-    run_id = payload.get("runId") or payload.get("run_id")
-    if not text and not final:
-        return None
-    return AssistantDelta(text=text, final=final, run_id=run_id if isinstance(run_id, str) else None)
 
 
 class OpenClawClient:
     def __init__(
         self,
         config: AppConfig,
-        on_delta: Callable[[AssistantDelta], None] | None = None,
+        on_chat: Callable[[ChatFrame], None] | None = None,
         on_status: Callable[[str], None] | None = None,
         on_run_ended: Callable[[], None] | None = None,
         on_disconnect: Callable[[str], None] | None = None,
     ) -> None:
         self.config = config
-        self.on_delta = on_delta
+        self.on_chat = on_chat
         self.on_status = on_status
         self.on_run_ended = on_run_ended
         self.on_disconnect = on_disconnect
         self._ws: Any = None
         self._reader_task: asyncio.Task[None] | None = None
         self._pending: dict[str, asyncio.Future[JsonObject]] = {}
-        self.current_run_id: str | None = None
+        # Run id of the turn in flight. The Gateway broadcasts events for every run it hosts
+        # (other sessions, earlier turns, heartbeats); only this run's events belong to us.
+        self.active_run_id: str | None = None
 
     @property
     def connected(self) -> bool:
@@ -277,7 +269,15 @@ class OpenClawClient:
             (payload.get("auth") or {}).get("scopes"),
         )
 
+    def _fail_pending(self, reason: str) -> None:
+        """Fail in-flight requests now instead of letting each wait out its 60 s timeout."""
+        for future in list(self._pending.values()):
+            if not future.done():
+                future.set_exception(ConnectionError(reason))
+        self._pending.clear()
+
     async def close(self) -> None:
+        self._fail_pending("Gateway connection closed")
         if self._reader_task:
             self._reader_task.cancel()
             try:
@@ -293,14 +293,13 @@ class OpenClawClient:
         return await self._call(history_request(self.config, limit))
 
     async def send_text(self, text: str) -> JsonObject:
-        response = await self._call(send_request(self.config, text))
-        payload = response.get("payload") if isinstance(response.get("payload"), dict) else {}
-        run_id = payload.get("runId") or response.get("runId")
-        self.current_run_id = run_id if isinstance(run_id, str) else self.current_run_id
-        return response
+        # chat.send uses the idempotency key as the run id, so the run is known before any event.
+        run_id = str(uuid.uuid4())
+        self.active_run_id = run_id
+        return await self._call(send_request(self.config, text, idempotency_key=run_id))
 
     async def abort(self) -> JsonObject:
-        return await self._call(abort_request(self.config, self.current_run_id))
+        return await self._call(abort_request(self.config, self.active_run_id))
 
     async def _call(self, request: JsonObject) -> JsonObject:
         if self._ws is None:
@@ -337,7 +336,7 @@ class OpenClawClient:
 
     async def _reader(self) -> None:
         assert self._ws is not None
-        seen_frames: set[tuple[str, int]] = set()
+        ended_runs: set[str] = set()
         disconnect_reason = "Connection closed"
         try:
             async for raw in self._ws:
@@ -359,61 +358,63 @@ class OpenClawClient:
                             future.set_exception(exc)
                     continue
 
-                delta = extract_assistant_delta(message)
-                if delta:
-                    frame_payload = message.get("params") or message.get("payload") or message.get("data") or {}
-                    if isinstance(frame_payload, dict):
-                        frame_run = str(frame_payload.get("runId", ""))
-                        frame_seq = frame_payload.get("seq")
-                        if frame_run and frame_seq is not None:
-                            frame_key = (frame_run, int(frame_seq))
-                            if frame_key in seen_frames:
-                                continue
-                            seen_frames.add(frame_key)
-                    LOGGER.info(
-                        "Assistant delta: chars=%s final=%s run_id=%s frame_type=%s frame_event=%s frame_method=%s payload_keys=%s data_keys=%s",
-                        len(delta.text),
-                        delta.final,
-                        delta.run_id,
-                        message.get("type"),
-                        message.get("event"),
-                        message.get("method"),
-                        sorted(frame_payload.keys()) if isinstance(frame_payload, dict) else None,
-                        sorted(frame_payload.get("data", {}).keys()) if isinstance(frame_payload, dict) and isinstance(frame_payload.get("data"), dict) else repr(frame_payload.get("data"))[:60] if isinstance(frame_payload, dict) else None,
-                    )
-                    if delta.run_id:
-                        self.current_run_id = delta.run_id
-                    if self.on_delta:
-                        self.on_delta(delta)
-                else:
-                    payload = message.get("payload") or message.get("params") or {}
-                    event_name = message.get("event") or message.get("method") or message.get("type") or "?"
-                    if isinstance(payload, dict) and event_name not in {"health", "tick"}:
-                        nested = payload.get("data")
-                        data_summary = sorted(nested.keys()) if isinstance(nested, dict) else repr(nested)[:60]
-                        state_val = payload.get("state")
-                        state_summary = sorted(state_val.keys()) if isinstance(state_val, dict) else repr(state_val)[:80]
-                        LOGGER.info(
-                            "Unhandled Gateway frame: event=%s payload_keys=%s data=%s state=%s",
-                            event_name,
-                            sorted(payload.keys()),
-                            data_summary,
-                            state_summary,
-                        )
-                        if isinstance(nested, dict) and "endedAt" in nested:
-                            LOGGER.info("Run ended detected, firing on_run_ended callback")
-                            if self.on_run_ended:
-                                self.on_run_ended()
-                    elif event_name not in {"health", "tick"}:
-                        LOGGER.info("Gateway event: %s", event_name)
+                self._handle_event(message, ended_runs)
         except Exception as exc:
             disconnect_reason = str(exc)
             LOGGER.warning("Gateway reader exited with error: %s", exc)
         finally:
             self._ws = None
+            self._fail_pending(f"Gateway disconnected: {disconnect_reason}")
             LOGGER.warning("Gateway disconnected: %s", disconnect_reason)
             if self.on_disconnect:
                 self.on_disconnect(disconnect_reason)
+
+    def _handle_event(self, message: JsonObject, ended_runs: set[str]) -> None:
+        frame = parse_chat_event(message)
+        if frame:
+            self._handle_chat_frame(frame, ended_runs)
+            return
+        # Everything else (agent lifecycle/tool/usage streams, presence, sessions.changed, ...)
+        # is not part of the reply. Agent lifecycle `endedAt` frames also arrive before the run
+        # is really over ("finishing"), so only the chat terminal event ends a turn.
+        event_name = message.get("event") or message.get("method") or message.get("type") or "?"
+        if event_name not in {"health", "tick"}:
+            LOGGER.debug("Ignoring Gateway event: %s", event_name)
+
+    def _handle_chat_frame(self, frame: ChatFrame, ended_runs: set[str]) -> None:
+        if frame.run_id != self.active_run_id:
+            LOGGER.debug("Ignoring chat %s for run %s (active run %s)", frame.state, frame.run_id[:8], (self.active_run_id or "-")[:8])
+            return
+        LOGGER.debug(
+            "Chat %s run=%s phase=%s replace=%s chars=%s delta=%r stop=%s",
+            frame.state,
+            frame.run_id[:8],
+            frame.phase,
+            frame.replace,
+            len(frame.text) if frame.text is not None else None,
+            preview(frame.delta_text),
+            frame.stop_reason,
+        )
+        if frame.state == "status":
+            return  # progress only; nothing to speak and the run is not over
+        if frame.terminal:
+            LOGGER.info(
+                "Chat %s: run=%s stop=%s yielded=%s chars=%s",
+                frame.state, frame.run_id[:8], frame.stop_reason, frame.yielded,
+                len(frame.text) if frame.text is not None else 0,
+            )
+        if self.on_chat:
+            self.on_chat(frame)
+        if frame.terminal:
+            self._handle_run_end(frame.run_id, ended_runs)
+
+    def _handle_run_end(self, run_id: str, ended_runs: set[str]) -> None:
+        if run_id != self.active_run_id or run_id in ended_runs:
+            return
+        ended_runs.add(run_id)
+        LOGGER.info("Run ended: run=%s", run_id[:8])
+        if self.on_run_ended:
+            self.on_run_ended()
 
     def _response_or_raise(self, message: JsonObject) -> JsonObject:
         error = message.get("error")
@@ -426,10 +427,3 @@ class OpenClawClient:
     def _emit_status(self, status: str) -> None:
         if self.on_status:
             self.on_status(status)
-
-
-async def stream_assistant_events(messages: AsyncIterator[JsonObject]) -> AsyncIterator[AssistantDelta]:
-    async for message in messages:
-        delta = extract_assistant_delta(message)
-        if delta:
-            yield delta

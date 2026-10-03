@@ -20,3 +20,7 @@ piper/
 *.spec
 orb-preview.html
 assets/avatar.*
+.DS_Store
+tests
+piper_*
+openWakeWord
