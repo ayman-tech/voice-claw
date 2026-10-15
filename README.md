@@ -77,6 +77,19 @@ Wake word detection runs locally with [openWakeWord](https://github.com/dscripka
 whenever the orb is in the ready state. The mic is closed while Donna is thinking or speaking.
 Orb click and Ctrl+Shift+Z still work.
 
+Donna plays a short Melanie acknowledgment on wake-up or manual activation. Wait
+for it to finish before speaking: microphone capture pauses during the clip to
+avoid transcribing Donna herself. A randomly selected thinking phrase plays once
+when a request is sent and stops as soon as the answer starts. Empty speech or a
+wake-word timeout plays “Say that again?” and returns to Ready; say “Hey Donna”
+or tap the orb to retry. Unexpected connection loss plays “I lost the connection.”
+Intentional disconnects and normal response completion are silent.
+
+Source recordings are in `assets/melanie11/`. The app uses trimmed WAV copies in
+`assets/melanie11/playback/`; after replacing an MP3, regenerate them with
+`.venv/bin/python scripts/prepare_voice_cues.py`. Original recordings are preserved.
+
+
 There is no pretrained "hey donna" model, so train one (synthetic data, no recordings needed) with the
 openWakeWord automatic training Colab notebook, then save the result as `models/wake/hey_donna.onnx`.
 Until that file exists the app runs push-to-talk only. To try the wiring first, point

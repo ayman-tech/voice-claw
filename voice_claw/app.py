@@ -15,6 +15,7 @@ from .app_logging import setup_logging
 from .openclaw_client import ChatFrame, OpenClawClient, extract_text
 from .assistant_text import AssistantTextTracker
 from .voice import STTService, TTSService
+from .cues import CuePlayer
 
 
 LOGGER = logging.getLogger(__name__)
@@ -432,6 +433,8 @@ def run() -> int:
             self.client: OpenClawClient | None = None
             self.tts = TTSService(self.config, self.show_error, on_audio_done=self.bridge.tts_audio_done.emit)
             self.stt = STTService(self.config, self.show_error)
+            self.cues = CuePlayer(self)
+            self._cue_generation = 0
             self.pending_assistant_text = ""
             self.text_tracker = AssistantTextTracker()
             self._turn_sent_at = 0.0
@@ -535,6 +538,7 @@ def run() -> int:
             return "Ready — tap the orb to speak"
 
         def _set_ready(self) -> None:
+            self._stop_cues()
             self.orb.set_state("ready")
             self.set_status(self._ready_text())
             self.stt.resume()
@@ -542,7 +546,8 @@ def run() -> int:
         def _on_stt_done(self) -> None:
             # STT turn produced no text (noise, or wake word with no speech) — back to ready.
             if self.orb.state in ("listening", "thinking"):
-                self._set_ready()
+                self.stt.pause()
+                self._play_cue("retry", self._set_ready)
 
         def _on_tts_audio_done(self) -> None:
             # Audio finished playing — return orb to ready if still showing speaking.
@@ -623,6 +628,7 @@ def run() -> int:
             self.stt.resume()
 
         def disconnect_gateway(self) -> None:
+            self._stop_cues()
             self.tts.stop()
             self.stt.pause()
             self.connect_button.setEnabled(False)
@@ -714,19 +720,42 @@ def run() -> int:
                 self.chat.start_assistant()
                 self.chat.append_assistant(body)
                 self.stt.pause()
+                self._stop_cues()
                 self.orb.set_state("speaking")
                 self.set_status("Speaking...")
                 self.tts.speak(body)
                 return
 
+        def _stop_cues(self) -> None:
+            self._cue_generation += 1
+            self.cues.stop()
+
+        def _play_cue(self, kind: str, done=None) -> None:
+            self._stop_cues()
+            generation = self._cue_generation
+
+            def finished() -> None:
+                if generation == self._cue_generation and done:
+                    done()
+
+            self.cues.play(kind, finished)
+
         def start_transcription(self) -> None:
             self.tts.stop()
-            self.stt.trigger_manual()
             self._on_stt_ready()
 
         def _on_stt_ready(self) -> None:
+            if not self.client or not self.client.connected:
+                return
+            self.tts.stop()
+            self.stt.pause()
             self.orb.set_state("listening")
+            self.set_status("Acknowledging...")
+            self._play_cue("listening", self._begin_listening)
+
+        def _begin_listening(self) -> None:
             self.set_status("Listening...")
+            self.stt.trigger_manual()
 
         def send_user_text(self, text: str) -> None:
             if not self.client:
@@ -742,6 +771,7 @@ def run() -> int:
             LOGGER.info("Sending transcribed user text: chars=%s", len(text))
             self.orb.set_state("thinking")
             self.set_status("Sending...")
+            self._play_cue("thinking")
             self.response_timeout_timer.start()
             future = self.runner.submit(self.client.send_text(text))
             future.add_done_callback(self.bridge.sent.emit)
@@ -762,8 +792,7 @@ def run() -> int:
                 return
             if not self.client or not self.client.connected:
                 LOGGER.warning("Response timeout — connection is dead, resetting")
-                self._reset_to_disconnected()
-                self.set_status("Connection lost — click Connect to reconnect")
+                self._on_gateway_disconnected("Response timeout with disconnected gateway")
                 return
             LOGGER.warning("Response timeout — falling back to history fetch")
             self._fetch_fallback_history()
@@ -779,6 +808,7 @@ def run() -> int:
                         LOGGER.info("Latency: first reply text %.2fs after send", self._turn_first_text_at - self._turn_sent_at)
                     self.response_timeout_timer.stop()
                     self.stt.pause()
+                    self._stop_cues()
                     self.orb.set_state("speaking")
                     self.set_status("Speaking...")
                     self.chat.start_assistant()
@@ -804,6 +834,7 @@ def run() -> int:
             self.tts.speak_delta("", final=True)
 
         def stop_current(self) -> None:
+            self._stop_cues()
             self.tts.stop()
             if self.client:
                 future = self.runner.submit(self.client.abort())
@@ -819,6 +850,9 @@ def run() -> int:
                 self.runner.submit(client.close())
 
         def _reset_to_disconnected(self) -> None:
+            self._stop_cues()
+            self.tts.stop()
+            self.stt.pause()
             self._close_client()
             self.orb.set_state("disconnected")
             self.connect_button.setText("Connect")
@@ -828,7 +862,10 @@ def run() -> int:
         def _on_gateway_disconnected(self, reason: str) -> None:
             self.response_timeout_timer.stop()
             LOGGER.warning("Gateway connection lost: %s", reason)
+            was_connected = self.orb.state != "disconnected" and self.connect_button.isEnabled()
             self._reset_to_disconnected()
+            if was_connected:
+                self._play_cue("disconnected")
             self.set_status(f"Connection lost — click Connect to reconnect")
 
         def _after_abort(self, future: Future) -> None:
@@ -882,6 +919,8 @@ def run() -> int:
                     LOGGER.warning("Could not register global hotkey: %s", exc)
 
         def closeEvent(self, event: object) -> None:
+            self._stop_cues()
+            self.tts.stop()
             if self._hotkey_handle is not None:
                 try:
                     import keyboard

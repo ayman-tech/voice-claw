@@ -2,7 +2,9 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_NAME="VoiceClaw"
+APP_NAME="Donna"
+# Derived from the app name (lowercase letters/digits only); override with BUNDLE_ID=... if needed.
+BUNDLE_ID="${BUNDLE_ID:-com.openclaw.$(printf '%s' "$APP_NAME" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9')}"
 APP_DIR="$ROOT_DIR/dist/$APP_NAME.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
@@ -24,17 +26,17 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
   <key>CFBundleDisplayName</key>
-  <string>VoiceClaw</string>
+  <string>$APP_NAME</string>
   <key>CFBundleExecutable</key>
   <string>$APP_NAME</string>
   <key>CFBundleIconFile</key>
   <string>$APP_NAME</string>
   <key>CFBundleIdentifier</key>
-  <string>com.openclaw.voiceclaw</string>
+  <string>$BUNDLE_ID</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>VoiceClaw</string>
+  <string>$APP_NAME</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
@@ -44,9 +46,9 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <key>LSMinimumSystemVersion</key>
   <string>12.0</string>
   <key>NSMicrophoneUsageDescription</key>
-  <string>VoiceClaw needs microphone access for push-to-talk transcription.</string>
+  <string>$APP_NAME needs microphone access for push-to-talk transcription.</string>
   <key>NSSpeechRecognitionUsageDescription</key>
-  <string>VoiceClaw uses local speech recognition to transcribe your voice.</string>
+  <string>$APP_NAME uses local speech recognition to transcribe your voice.</string>
 </dict>
 </plist>
 PLIST
@@ -63,7 +65,7 @@ export PYTHONPATH="\$PROJECT_DIR:\${PYTHONPATH:-}"
 
 if [[ ! -x "\$PROJECT_DIR/.venv/bin/python" ]]; then
   if ! command -v uv >/dev/null 2>&1; then
-    osascript -e 'display alert "VoiceClaw cannot start" message "The project virtual environment is missing, and uv was not found on PATH."'
+    osascript -e 'display alert "$APP_NAME cannot start" message "The project virtual environment is missing, and uv was not found on PATH."'
     exit 1
   fi
   uv sync

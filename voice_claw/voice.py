@@ -38,8 +38,6 @@ def _clean_for_tts(text: str) -> str:
     return text
 
 _ASSETS_DIR = Path(__file__).parent.parent / "assets"
-_SOUND_LONG = str(_ASSETS_DIR / "interface-long.wav")
-_SOUND_SHORT = str(_ASSETS_DIR / "interface-short.wav")
 
 
 @dataclass(slots=True)
@@ -158,29 +156,6 @@ class TTSService:
             self.on_error(message)
 
 
-def _play_sound(path: str) -> None:
-    """Play a WAV file without blocking the caller."""
-    try:
-        import sys
-        if sys.platform == "win32":
-            import winsound
-            threading.Thread(
-                target=winsound.PlaySound,
-                args=(path, winsound.SND_FILENAME),
-                daemon=True,
-            ).start()
-        elif sys.platform == "darwin":
-            import subprocess
-            threading.Thread(
-                target=subprocess.run,
-                args=(["afplay", path],),
-                kwargs={"capture_output": True},
-                daemon=True,
-            ).start()
-    except Exception:
-        pass
-
-
 class STTService:
     """Persistent speech recorder with optional "Hey Donna" wake word.
 
@@ -233,7 +208,6 @@ class STTService:
                 def on_recording_stop() -> None:
                     self._t_speech_end = time.monotonic()
                     LOGGER.info("STT: recording stopped — transcribing")
-                    _play_sound(_SOUND_SHORT)
 
                 def on_wakeword_detected() -> None:
                     # The recorder fires this on every audio frame the score stays above the
@@ -242,7 +216,7 @@ class STTService:
                         return
                     self._wake_fired.set()
                     LOGGER.info("Wake word detected")
-                    _play_sound(_SOUND_LONG)
+                    self.pause()  # Do not capture the spoken acknowledgment.
                     if self._on_wake:
                         self._on_wake()
 
@@ -345,9 +319,10 @@ class STTService:
 
     def trigger_manual(self) -> None:
         """Start listening now without needing the wake word."""
-        _play_sound(_SOUND_LONG)
-        self._set_microphone(True)
         recorder = self._recorder
+        if recorder is not None:
+            recorder.clear_audio_queue()  # discard pre-cue input before reopening capture
+        self._set_microphone(True)
         if recorder is not None and self._wake_enabled:
             # Same state the recorder enters after a real wake word detection
             # (the recording worker runs in-process, so this is safe to set here).
